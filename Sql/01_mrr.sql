@@ -12,3 +12,13 @@ SELECT
 FROM subscriptions
 GROUP BY month
 ORDER BY month;
+
+--Explanation-- 
+
+* Groups subscriptions by month
+
+* Adds monthly revenue
+
+* Shows revenue growth trend
+
+* MRR is the core SaaS metric used to track predictable revenue.
