@@ -1,0 +1,192 @@
+import pandas as pd
+import numpy as np
+from sqlalchemy import create_engine
+import matplotlib.pyplot as plt
+
+from sqlalchemy import create_engine
+
+engine = create_engine(
+    "postgresql+psycopg2://postgres@localhost:5433/Saas_Finance"
+)
+
+with engine.connect() as conn:
+    print("✅ Connected to PostgreSQL successfully")
+
+mrr_query = """
+WITH subscription_lifecycle AS (
+    SELECT
+        s.account_id,
+        s.monthly_revenue,
+        DATE_TRUNC('month', s.start_date) AS start_month,
+        DATE_TRUNC(
+            'month',
+            COALESCE(c.churn_date, CURRENT_DATE)
+        ) AS end_month
+    FROM subscriptions s
+    LEFT JOIN churn_events c
+        ON s.account_id = c.account_id
+),
+monthly_account_mrr AS (
+    SELECT
+        account_id,
+        month,
+        SUM(monthly_revenue) AS mrr
+    FROM subscription_lifecycle
+    JOIN generate_series(start_month, end_month, INTERVAL '1 month') AS month
+        ON TRUE
+    GROUP BY account_id, month
+)
+SELECT
+    month,
+    SUM(mrr) AS total_mrr
+FROM monthly_account_mrr
+GROUP BY month
+ORDER BY month;
+"""
+mrr_df = pd.read_sql(mrr_query, engine)
+print(mrr_df.head())
+
+
+mrr_df['month'] = pd.to_datetime(mrr_df['month'])
+mrr_df.set_index('month', inplace=True)
+mrr_df = mrr_df.sort_index()
+mrr_df = mrr_df.resample('MS').sum()
+mrr_df['total_mrr'] = mrr_df['total_mrr'].fillna(0)
+
+
+print(mrr_df.tail())
+
+plt.figure(figsize=(10,5))
+plt.plot(mrr_df.index, mrr_df['total_mrr'], marker='o')
+plt.title("Monthly Recurring Revenue (MRR)")
+plt.xlabel("Month")
+plt.ylabel("MRR")
+plt.grid(True)
+plt.show()
+
+mrr_df['growth_rate'] = mrr_df['total_mrr'].pct_change()
+print(mrr_df[['total_mrr', 'growth_rate']].tail(10))
+
+
+growth_clean = mrr_df['growth_rate'].dropna()
+growth_clean = growth_clean[(growth_clean > -0.5) & (growth_clean < 1)]
+
+avg_growth = growth_clean.mean()
+best_case_growth = avg_growth * 1.3
+worst_case_growth = avg_growth * 0.7
+
+print("Avg:", avg_growth)
+print("Best:", best_case_growth)
+print("Worst:", worst_case_growth)
+
+def forecast_mrr(start_mrr, growth, months=12):
+    values = []
+    current = start_mrr
+    for _ in range(months):
+        current = current * (1 + growth)
+        values.append(current)
+    return values
+
+
+last_mrr = mrr_df['total_mrr'].iloc[-1]
+
+months = 12
+forecast_index = pd.date_range(
+    start=mrr_df.index[-1] + pd.offsets.MonthBegin(),
+    periods=months,
+    freq='MS'
+)
+
+forecast_base = forecast_mrr(last_mrr, avg_growth, months)
+forecast_best = forecast_mrr(last_mrr, best_case_growth, months)
+forecast_worst = forecast_mrr(last_mrr, worst_case_growth, months)
+
+forecast_df = pd.DataFrame({
+    'base_case': forecast_base,
+    'best_case': forecast_best,
+    'worst_case': forecast_worst
+}, index=forecast_index)
+
+
+plt.figure(figsize=(12,6))
+plt.plot(mrr_df.index, mrr_df['total_mrr'], label='Actual MRR')
+plt.plot(forecast_df.index, forecast_df['base_case'], '--', label='Base Case')
+plt.plot(forecast_df.index, forecast_df['best_case'], '--', label='Best Case')
+plt.plot(forecast_df.index, forecast_df['worst_case'], '--', label='Worst Case')
+plt.title("MRR Forecast Scenarios")
+plt.xlabel("Month")
+plt.ylabel("MRR")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+
+burn_query = """
+SELECT
+    month,
+    SUM(spend) AS total_spend
+FROM marketing_campaigns
+GROUP BY month
+ORDER BY month;
+"""
+
+burn_df = pd.read_sql(burn_query, engine)
+burn_df['month'] = pd.to_datetime(burn_df['month'])
+burn_df.set_index('month', inplace=True)
+
+print(burn_df.head())
+
+
+print(type(mrr_df))
+print(mrr_df.head())
+
+
+burn_query = """
+SELECT
+    month,
+    SUM(spend) AS total_spend
+FROM marketing_campaigns
+GROUP BY month
+ORDER BY month;
+"""
+
+burn_df = pd.read_sql(burn_query, engine)
+burn_df['month'] = pd.to_datetime(burn_df['month'])
+burn_df.set_index('month', inplace=True)
+
+print(burn_df.head())
+
+
+
+mrr_df.index = mrr_df.index.tz_localize(None)
+burn_df.index = burn_df.index.tz_localize(None)
+
+finance_df = mrr_df.join(burn_df, how='inner')
+finance_df = finance_df.sort_index()
+
+print(finance_df.head())
+
+
+finance_df['net_burn'] = finance_df['total_spend'] - finance_df['total_mrr']
+
+print(finance_df[['total_mrr', 'total_spend', 'net_burn']].tail())
+
+
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(12,6))
+plt.plot(finance_df.index, finance_df['total_mrr'], label='MRR')
+plt.plot(finance_df.index, finance_df['total_spend'], label='Spend')
+plt.plot(finance_df.index, finance_df['net_burn'], label='Net Burn')
+plt.title("MRR vs Spend vs Net Burn")
+plt.xlabel("Month")
+plt.ylabel("Amount")
+plt.legend()
+plt.grid(True)
+plt.show()
+
+
+final_df = finance_df.copy()
+final_df['month'] = final_df.index
+final_df.reset_index(drop=True, inplace=True)
+
