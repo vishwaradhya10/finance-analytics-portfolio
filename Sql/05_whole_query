@@ -1,0 +1,186 @@
+Create Table accounts (
+account_id INT Primary key,
+company_name text,
+industry text,
+country text,
+signup_date DATE
+);
+
+Create Table subscriptions (
+subscription_id INT PRIMARY KEY,
+account_id INT,
+start_date DATE,
+plan_name TEXT,
+monthly_revenue NUMERIC,
+status TEXT
+);
+
+Create Table churn_events(
+churn_id INT PRIMARY KEY,
+account_id INT,
+churn_date DATE,
+churn_reason TEXT
+);
+
+CREATE TABLE marketing_campaigns (
+    channel TEXT,
+    campaign_name TEXT,
+    spend NUMERIC,
+    impressions INT,
+    clicks INT,
+    conversions INT,
+	month DATE
+);
+
+INSERT INTO accounts (account_id, company_name, industry, country, signup_date)
+SELECT
+    id,
+    'Company_' || id,
+    CASE
+        WHEN id % 5 = 0 THEN 'SaaS'
+        WHEN id % 5 = 1 THEN 'Fintech'
+        WHEN id % 5 = 2 THEN 'AI'
+        WHEN id % 5 = 3 THEN 'Analytics'
+        ELSE 'Ecommerce'
+    END,
+    CASE
+        WHEN id % 6 = 0 THEN 'USA'
+        WHEN id % 6 = 1 THEN 'UK'
+        WHEN id % 6 = 2 THEN 'Germany'
+        WHEN id % 6 = 3 THEN 'France'
+        WHEN id % 6 = 4 THEN 'Netherlands'
+        ELSE 'India'
+    END,
+    DATE '2022-01-01' + (id || ' days')::INTERVAL
+FROM generate_series(1, 1000) AS id;
+
+INSERT INTO subscriptions
+(subscription_id, account_id, plan_name, monthly_revenue, start_date, status)
+SELECT
+    row_number() OVER (),
+    a.account_id,
+    CASE
+        WHEN random() < 0.5 THEN 'Basic'
+        WHEN random() < 0.85 THEN 'Pro'
+        ELSE 'Enterprise'
+    END,
+    CASE
+        WHEN random() < 0.5 THEN 49
+        WHEN random() < 0.85 THEN 99
+        ELSE 299
+    END,
+    a.signup_date + (random() * 300)::INT,
+    CASE
+        WHEN random() < 0.75 THEN 'active'
+        ELSE 'churned'
+    END
+FROM accounts a
+CROSS JOIN generate_series(1, 3);
+
+INSERT INTO churn_events
+(churn_id, account_id, churn_date, churn_reason)
+SELECT
+    row_number() OVER (),
+    s.account_id,
+    s.start_date + (30 + random() * 180)::INT,
+    CASE
+        WHEN random() < 0.4 THEN 'Price'
+        WHEN random() < 0.7 THEN 'No Value'
+        WHEN random() < 0.9 THEN 'Competitor'
+        ELSE 'Support'
+    END
+FROM subscriptions s
+WHERE s.status = 'churned';
+
+INSERT INTO marketing_campaigns
+(channel, campaign_name, spend, impressions, clicks, conversions, month)
+SELECT
+    CASE
+        WHEN random() < 0.25 THEN 'Social Media'
+        WHEN random() < 0.5 THEN 'PPC'
+        WHEN random() < 0.75 THEN 'Email'
+        ELSE 'SEO'
+    END,
+    CASE
+        WHEN random() < 0.4 THEN 'Awareness'
+        WHEN random() < 0.7 THEN 'Consideration'
+        ELSE 'Conversion'
+    END,
+    ROUND((500 + random() * 9000)::NUMERIC, 2),
+    (random() * 50000)::INT,
+    (random() * 5000)::INT,
+    (random() * 300)::INT,
+    month
+FROM generate_series('2022-01-01'::date, '2025-01-01'::date, '1 month') AS month,
+     generate_series(1, 30);
+
+
+--Monthly MRR--
+
+SELECT
+    DATE_TRUNC('month', start_date) AS month,
+    SUM(monthly_revenue) AS mrr
+FROM subscriptions
+WHERE status = 'active'
+GROUP BY 1
+ORDER BY 1;
+
+--MRR by Plan--
+
+SELECT
+    DATE_TRUNC('month', start_date) AS month,
+    plan_name,
+    SUM(monthly_revenue) AS mrr
+FROM subscriptions
+WHERE status = 'active'
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+--Cohort Analysis--
+
+WITH cohorts AS (
+    SELECT
+        account_id,
+        DATE_TRUNC('month', signup_date) AS cohort_month
+    FROM accounts
+),
+activity AS (
+    SELECT
+        s.account_id,
+        DATE_TRUNC('month', s.start_date) AS active_month
+    FROM subscriptions s
+)
+SELECT
+    c.cohort_month,
+    a.active_month,
+    COUNT(DISTINCT a.account_id) AS active_customers
+FROM cohorts c
+JOIN activity a ON c.account_id = a.account_id
+GROUP BY 1, 2
+ORDER BY 1, 2;
+
+--CAC--
+--Monthly CAC--
+
+WITH monthly_spend AS (
+    SELECT
+        month,
+        SUM(spend) AS total_spend
+    FROM marketing_campaigns
+    GROUP BY 1
+),
+new_customers AS (
+    SELECT
+        DATE_TRUNC('month', signup_date) AS month,
+        COUNT(account_id) AS new_customers
+    FROM accounts
+    GROUP BY 1
+)
+SELECT
+    s.month,
+    total_spend / NULLIF(new_customers, 0) AS cac
+FROM monthly_spend s
+LEFT JOIN new_customers n ON s.month = n.month
+ORDER BY s.month;
+
+
