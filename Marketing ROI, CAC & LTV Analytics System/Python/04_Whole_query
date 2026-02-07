@@ -1,0 +1,84 @@
+import pandas as pd
+import numpy as np
+from sqlalchemy import create_engine
+import matplotlib.pyplot as plt
+
+
+#Marketing performance by channel
+
+    marketing_query = """
+SELECT
+    channel,
+    SUM(spend) AS total_spend,
+    SUM(conversions) AS total_conversions,
+    SUM(spend) / NULLIF(SUM(conversions), 0) AS cac
+FROM marketing_campaigns
+GROUP BY channel;
+"""
+marketing_df = pd.read_sql(marketing_query, engine)
+print(marketing_df)
+
+#Revenue per customer
+
+ltv_query = """
+SELECT
+    account_id,
+    SUM(monthly_revenue) AS total_revenue
+FROM subscriptions
+GROUP BY account_id;
+"""
+ltv_df = pd.read_sql(ltv_query, engine)
+print(ltv_df.head())
+
+
+#CALCULATE LTV
+
+avg_ltv = ltv_df['total_revenue'].mean()
+print("Average LTV per customer:", round(avg_ltv, 2))
+
+
+#CAC PAYBACK PERIOD
+
+monthly_revenue_query = """
+SELECT
+    AVG(monthly_revenue) AS avg_monthly_revenue
+FROM subscriptions;
+"""
+avg_monthly_rev = pd.read_sql(monthly_revenue_query, engine).iloc[0,0]
+print("Average Monthly Revenue:", round(avg_monthly_rev, 2))
+
+#Payback by channel
+
+marketing_df['payback_months'] = marketing_df['cac'] / avg_monthly_rev
+print(marketing_df[['channel', 'cac', 'payback_months']])
+
+
+#ROI SCORE
+
+marketing_df['roi_score'] = avg_ltv / marketing_df['cac']
+marketing_df = marketing_df.sort_values('roi_score', ascending=False)
+print(marketing_df)
+
+#VISUALIZE
+#ROI by channel
+
+plt.figure(figsize=(8,5))
+plt.bar(marketing_df['channel'], marketing_df['roi_score'])
+plt.title("Marketing Channel ROI Score")
+plt.xlabel("Channel")
+plt.ylabel("LTV / CAC")
+plt.grid(axis='y')
+plt.show()
+
+#Payback period by channel
+
+plt.figure(figsize=(8,5))
+plt.bar(marketing_df['channel'], marketing_df['payback_months'])
+plt.axhline(12, color='red', linestyle='--', label='12-month benchmark')
+plt.title("CAC Payback Period by Channel")
+plt.xlabel("Channel")
+plt.ylabel("Months")
+plt.legend()
+plt.show()
+
+
