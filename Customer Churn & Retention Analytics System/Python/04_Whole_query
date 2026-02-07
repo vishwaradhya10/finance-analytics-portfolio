@@ -1,0 +1,99 @@
+import pandas as pd
+import numpy as np
+from sqlalchemy import create_engine
+import matplotlib.pyplot as plt
+
+churn_query = """
+WITH lifetime AS (
+    SELECT
+        a.account_id,
+        (COALESCE(MIN(c.churn_date), CURRENT_DATE) - MIN(s.start_date)) AS lifetime_days
+    FROM accounts a
+    JOIN subscriptions s ON a.account_id = s.account_id
+    LEFT JOIN churn_events c ON a.account_id = c.account_id
+    GROUP BY a.account_id
+),
+revenue AS (
+    SELECT
+        account_id,
+        SUM(monthly_revenue) AS total_revenue
+    FROM subscriptions
+    GROUP BY account_id
+),
+label AS (
+    SELECT
+        a.account_id,
+        CASE WHEN c.account_id IS NOT NULL THEN 1 ELSE 0 END AS churned
+    FROM accounts a
+    LEFT JOIN churn_events c ON a.account_id = c.account_id
+)
+SELECT
+    l.account_id,
+    l.lifetime_days,
+    r.total_revenue,
+    lbl.churned
+FROM lifetime l
+JOIN revenue r USING (account_id)
+JOIN label lbl USING (account_id);
+"""
+
+churn_df = pd.read_sql(churn_query, engine)
+print(churn_df.head())
+
+print(churn_df.isna().sum())
+print(churn_df.describe())
+
+#Average revenue per day
+
+churn_df['revenue_per_day'] = churn_df['total_revenue'] / churn_df['lifetime_days']
+
+#Normalize lifetime (0–1 scale)
+
+churn_df['lifetime_norm'] = churn_df['lifetime_days'] / churn_df['lifetime_days'].max()
+
+#RULE-BASED CHURN RISK SCORE
+
+churn_df['risk_score'] = (
+    0.5 * (1 - churn_df['lifetime_norm']) +
+    0.5 * (churn_df['churned'])
+)
+
+print(churn_df[['account_id', 'lifetime_days', 'total_revenue', 'churned', 'risk_score']].head())
+
+#SEGMENT CUSTOMERS BY RISK
+
+churn_df['risk_segment'] = pd.cut(
+    churn_df['risk_score'],
+    bins=[-0.01, 0.3, 0.6, 1],
+    labels=['Low Risk', 'Medium Risk', 'High Risk']
+)
+
+print(churn_df['risk_segment'].value_counts())
+
+#REVENUE AT RISK
+
+revenue_at_risk = churn_df[churn_df['risk_segment'] == 'High Risk']['total_revenue'].sum()
+print("Revenue at risk:", round(revenue_at_risk, 2))
+
+#visualization
+#Risk distribution
+
+plt.figure(figsize=(6,4))
+churn_df['risk_segment'].value_counts().plot(kind='bar')
+plt.title("Customer Churn Risk Segments")
+plt.xlabel("Risk Segment")
+plt.ylabel("Customers")
+plt.show()
+
+#Lifetime vs revenue
+
+plt.figure(figsize=(6,4))
+plt.scatter(churn_df['lifetime_days'], churn_df['total_revenue'], c=churn_df['churned'])
+plt.title("Lifetime vs Revenue (Churn Highlighted)")
+plt.xlabel("Lifetime Days")
+plt.ylabel("Total Revenue")
+plt.show()
+
+
+
+
